@@ -24,7 +24,7 @@
     ]
   },
   "bugs": {
-    "url": "https://github.com/colinmeinke/ghost-storage-adapter-s3/issues"
+    "url": "https://github.com/yourusername/ghost-storage-adapter-cos/issues"
   },
   "config": {
     "commitizen": {
@@ -32,10 +32,10 @@
     }
   },
   "dependencies": {
-    "aws-sdk": "^2.331.0",
+    "cos-nodejs-sdk-v5": "^2.12.0",
     "ghost-storage-base": "0.0.1"
   },
-  "description": "An AWS S3 storage adapter for Ghost 0.10+",
+  "description": "A Tencent COS storage adapter for Ghost 1.x+",
   "devDependencies": {
     "babel-cli": "^6.14.0",
     "babel-plugin-add-module-exports": "^0.2.1",
@@ -48,20 +48,20 @@
     "standard": "^8.3.0",
     "travis-deploy-once": "^5.0.2"
   },
-  "homepage": "https://github.com/colinmeinke/ghost-storage-adapter-s3#readme",
+  "homepage": "https://github.com/yourusername/ghost-storage-adapter-cos#readme",
   "license": "ISC",
   "keywords": [
     "adapter",
-    "aws",
+    "tencent",
     "ghost",
-    "s3",
+    "cos",
     "storage"
   ],
   "main": "index.js",
-  "name": "ghost-storage-adapter-s3",
+  "name": "ghost-storage-adapter-cos",
   "repository": {
     "type": "git",
-    "url": "https://github.com/colinmeinke/ghost-storage-adapter-s3.git"
+    "url": "https://github.com/yourusername/ghost-storage-adapter-cos.git"
   },
   "scripts": {
     "build": "babel ./src/index.js --out-file ./index.js",
@@ -73,5 +73,5 @@
     "test": "exit 0",
     "travis-deploy-once": "travis-deploy-once"
   },
-  "version": "0.0.0-development"
+  "version": "1.0.0"
 }

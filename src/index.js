@@ -1,4 +1,4 @@
-import AWS from 'aws-sdk'
+import COS from 'cos-nodejs-sdk-v5'
 import BaseStore from 'ghost-storage-base'
 import { join } from 'path'
 import { readFile } from 'fs'
@@ -12,75 +12,75 @@ class Store extends BaseStore {
     super(config)
 
     const {
-      accessKeyId,
+      secretId,
+      secretKey,
       assetHost,
       bucket,
       pathPrefix,
       region,
-      secretAccessKey,
-      endpoint,
-      serverSideEncryption,
-      forcePathStyle,
-      signatureVersion,
-      acl
+      appId,
+      domain,
+      protocol
     } = config
 
-    // Compatible with the aws-sdk's default environment variables
-    this.accessKeyId = accessKeyId
-    this.secretAccessKey = secretAccessKey
-    this.region = process.env.AWS_DEFAULT_REGION || region
+    // COS credentials - required
+    this.secretId = process.env.GHOST_STORAGE_ADAPTER_COS_SECRET_ID || secretId
+    this.secretKey = process.env.GHOST_STORAGE_ADAPTER_COS_SECRET_KEY || secretKey
 
-    this.bucket = process.env.GHOST_STORAGE_ADAPTER_S3_PATH_BUCKET || bucket
+    // COS bucket configuration - required
+    this.bucket = process.env.GHOST_STORAGE_ADAPTER_COS_BUCKET || bucket
+    this.region = process.env.GHOST_STORAGE_ADAPTER_COS_REGION || region
 
     // Optional configurations
-    this.host = process.env.GHOST_STORAGE_ADAPTER_S3_ASSET_HOST || assetHost || `https://s3${this.region === 'us-east-1' ? '' : `-${this.region}`}.amazonaws.com/${this.bucket}`
-    this.pathPrefix = stripLeadingSlash(process.env.GHOST_STORAGE_ADAPTER_S3_PATH_PREFIX || pathPrefix || '')
-    this.endpoint = process.env.GHOST_STORAGE_ADAPTER_S3_ENDPOINT || endpoint || ''
-    this.serverSideEncryption = process.env.GHOST_STORAGE_ADAPTER_S3_SSE || serverSideEncryption || ''
-    this.s3ForcePathStyle = Boolean(process.env.GHOST_STORAGE_ADAPTER_S3_FORCE_PATH_STYLE) || Boolean(forcePathStyle) || false
-    this.signatureVersion = process.env.GHOST_STORAGE_ADAPTER_S3_SIGNATURE_VERSION || signatureVersion || 'v4'
-    this.acl = process.env.GHOST_STORAGE_ADAPTER_S3_ACL || acl || 'public-read'
+    this.pathPrefix = stripLeadingSlash(process.env.GHOST_STORAGE_ADAPTER_COS_PATH_PREFIX || pathPrefix || '')
+    this.domain = process.env.GHOST_STORAGE_ADAPTER_COS_DOMAIN || domain || ''
+    this.protocol = process.env.GHOST_STORAGE_ADAPTER_COS_PROTOCOL || protocol || 'https:'
+
+    // Asset host for CDN or custom domain
+    this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost ||
+      (this.domain ? `${this.protocol}//${this.domain}` :
+       `${this.protocol}//${this.bucket}.cos.${this.region}.myqcloud.com`)
   }
 
   delete (fileName, targetDir) {
     const directory = targetDir || this.getTargetDir(this.pathPrefix)
 
     return new Promise((resolve, reject) => {
-      this.s3()
-        .deleteObject({
-          Bucket: this.bucket,
-          Key: stripLeadingSlash(join(directory, fileName))
-        }, (err) => err ? resolve(false) : resolve(true))
+      this.cos().deleteObject({
+        Bucket: this.bucket,
+        Region: this.region,
+        Key: stripLeadingSlash(join(directory, fileName))
+      }, (err, data) => {
+        if (err) {
+          resolve(false)
+        } else {
+          resolve(true)
+        }
+      })
     })
   }
 
   exists (fileName, targetDir) {
     return new Promise((resolve, reject) => {
-      this.s3()
-        .getObject({
-          Bucket: this.bucket,
-          Key: stripLeadingSlash(join(targetDir, fileName))
-        }, (err) => err ? resolve(false) : resolve(true))
+      this.cos().headObject({
+        Bucket: this.bucket,
+        Region: this.region,
+        Key: stripLeadingSlash(join(targetDir, fileName))
+      }, (err, data) => {
+        if (err) {
+          resolve(false)
+        } else {
+          resolve(true)
+        }
+      })
     })
   }
 
-  s3 () {
-    const options = {
-      bucket: this.bucket,
-      region: this.region,
-      signatureVersion: this.signatureVersion,
-      s3ForcePathStyle: this.s3ForcePathStyle
-    }
-
-    // Set credentials only if provided, falls back to AWS SDK's default provider chain
-    if (this.accessKeyId && this.secretAccessKey) {
-      options.credentials = new AWS.Credentials(this.accessKeyId, this.secretAccessKey)
-    }
-
-    if (this.endpoint !== '') {
-      options.endpoint = this.endpoint
-    }
-    return new AWS.S3(options)
+  cos () {
+    return new COS({
+      SecretId: this.secretId,
+      SecretKey: this.secretKey
+    })
   }
 
   save (image, targetDir) {
@@ -91,38 +91,54 @@ class Store extends BaseStore {
         this.getUniqueFileName(image, directory),
         readFileAsync(image.path)
       ]).then(([ fileName, file ]) => {
-        let config = {
-          ACL: this.acl,
-          Body: file,
+        this.cos().putObject({
           Bucket: this.bucket,
-          CacheControl: `max-age=${30 * 24 * 60 * 60}`,
+          Region: this.region,
+          Key: stripLeadingSlash(fileName),
+          Body: file,
           ContentType: image.type,
-          Key: stripLeadingSlash(fileName)
-        }
-        if (this.serverSideEncryption !== '') {
-          config.ServerSideEncryption = this.serverSideEncryption
-        }
-        this.s3()
-          .putObject(config, (err, data) => err ? reject(err) : resolve(`${this.host}/${fileName}`))
+          CacheControl: `max-age=${30 * 24 * 60 * 60}`
+        }, (err, data) => {
+          if (err) {
+            reject(err)
+          } else {
+            resolve(`${this.host}/${fileName}`)
+          }
+        })
       })
       .catch(err => reject(err))
     })
   }
 
   serve () {
-    return (req, res, next) =>
-      this.s3()
-        .getObject({
-          Bucket: this.bucket,
-          Key: stripLeadingSlash(stripEndingSlash(this.pathPrefix) + req.path)
-        })
-        .on('httpHeaders', (statusCode, headers, response) => res.set(headers))
-        .createReadStream()
-        .on('error', err => {
+    return (req, res, next) => {
+      const key = stripLeadingSlash(stripEndingSlash(this.pathPrefix) + req.path)
+
+      this.cos().getObject({
+        Bucket: this.bucket,
+        Region: this.region,
+        Key: key
+      }, (err, data) => {
+        if (err) {
           res.status(404)
           next(err)
-        })
-        .pipe(res)
+        } else {
+          // Set appropriate headers
+          if (data.headers) {
+            Object.keys(data.headers).forEach(header => {
+              res.set(header, data.headers[header])
+            })
+          }
+
+          if (data.Body) {
+            res.send(data.Body)
+          } else {
+            res.status(404)
+            next(new Error('File not found'))
+          }
+        }
+      })
+    }
   }
 
   read (options) {
@@ -132,17 +148,23 @@ class Store extends BaseStore {
       // remove trailing slashes
       let path = (options.path || '').replace(/\/$|\\$/, '')
 
-      // check if path is stored in s3 handled by us
+      // check if path is stored in COS handled by us
       if (!path.startsWith(this.host)) {
-        reject(new Error(`${path} is not stored in s3`))
+        reject(new Error(`${path} is not stored in COS`))
       }
       path = path.substring(this.host.length)
 
-      this.s3()
-        .getObject({
-          Bucket: this.bucket,
-          Key: stripLeadingSlash(path)
-        }, (err, data) => err ? reject(err) : resolve(data.Body))
+      this.cos().getObject({
+        Bucket: this.bucket,
+        Region: this.region,
+        Key: stripLeadingSlash(path)
+      }, (err, data) => {
+        if (err) {
+          reject(err)
+        } else {
+          resolve(data.Body)
+        }
+      })
     })
   }
 }

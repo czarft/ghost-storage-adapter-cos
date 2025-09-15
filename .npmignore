@@ -1,0 +1,32 @@
+# Source files (only include compiled output)
+src/
+
+# Test files
+test-*.js
+
+# Development files
+.travis.yml
+yarn.lock
+
+# Documentation (keep README.md)
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Dependencies (users will install their own)
+node_modules/
+
+# Temporary files
+.tmp/
+.temp/
