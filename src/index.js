@@ -20,7 +20,8 @@ class Store extends BaseStore {
       region,
       appId,
       domain,
-      protocol
+      protocol,
+      privateStorage
     } = config
 
     // COS credentials - required
@@ -35,11 +36,17 @@ class Store extends BaseStore {
     this.pathPrefix = stripLeadingSlash(process.env.GHOST_STORAGE_ADAPTER_COS_PATH_PREFIX || pathPrefix || '')
     this.domain = process.env.GHOST_STORAGE_ADAPTER_COS_DOMAIN || domain || ''
     this.protocol = process.env.GHOST_STORAGE_ADAPTER_COS_PROTOCOL || protocol || 'https:'
+    this.privateStorage = process.env.GHOST_STORAGE_ADAPTER_COS_PRIVATE_STORAGE === 'true' || privateStorage || false
 
     // Asset host for CDN or custom domain
-    this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost ||
-      (this.domain ? `${this.protocol}//${this.domain}` :
-       `${this.protocol}//${this.bucket}.cos.${this.region}.myqcloud.com`)
+    // For private storage, don't set host so Ghost uses serve() method
+    if (this.privateStorage) {
+      this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost || ''
+    } else {
+      this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost ||
+        (this.domain ? `${this.protocol}//${this.domain}` :
+         `${this.protocol}//${this.bucket}.cos.${this.region}.myqcloud.com`)
+    }
   }
 
   delete (fileName, targetDir) {
@@ -91,10 +98,13 @@ class Store extends BaseStore {
         this.getUniqueFileName(image, directory),
         readFileAsync(image.path)
       ]).then(([ fileName, file ]) => {
+        // Normalize filename to lowercase to match Ghost's URL normalization
+        const normalizedFileName = fileName.toLowerCase()
+
         this.cos().putObject({
           Bucket: this.bucket,
           Region: this.region,
-          Key: stripLeadingSlash(fileName),
+          Key: stripLeadingSlash(normalizedFileName),
           Body: file,
           ContentType: image.type,
           CacheControl: `max-age=${30 * 24 * 60 * 60}`
@@ -102,7 +112,12 @@ class Store extends BaseStore {
           if (err) {
             reject(err)
           } else {
-            resolve(`${this.host}/${fileName}`)
+            // For private storage with empty host, return relative URL so Ghost uses serve() method
+            if (this.privateStorage && !this.host) {
+              resolve(`/${this.pathPrefix ? this.pathPrefix + '/' : ''}${normalizedFileName}`)
+            } else {
+              resolve(`${this.host}/${normalizedFileName}`)
+            }
           }
         })
       })
@@ -114,31 +129,77 @@ class Store extends BaseStore {
     return (req, res, next) => {
       const key = stripLeadingSlash(stripEndingSlash(this.pathPrefix) + req.path)
 
+      // Debug logging
+      console.log('[COS Adapter] serve() called for:', req.path)
+      console.log('[COS Adapter] Trying key:', key)
+
       this.cos().getObject({
         Bucket: this.bucket,
         Region: this.region,
         Key: key
       }, (err, data) => {
         if (err) {
+          console.log('[COS Adapter] Error:', err.message)
           res.status(404)
           next(err)
         } else {
-          // Set appropriate headers
-          if (data.headers) {
-            Object.keys(data.headers).forEach(header => {
-              res.set(header, data.headers[header])
-            })
-          }
-
-          if (data.Body) {
-            res.send(data.Body)
-          } else {
-            res.status(404)
-            next(new Error('File not found'))
-          }
+          console.log('[COS Adapter] File found, serving')
+          this.sendFileResponse(res, data)
         }
       })
     }
+  }
+
+  sendFileResponse(res, data) {
+    // Set appropriate headers
+    if (data.headers) {
+      Object.keys(data.headers).forEach(header => {
+        res.set(header, data.headers[header])
+      })
+    }
+
+    if (data.Body) {
+      res.send(data.Body)
+    } else {
+      res.status(404)
+      next(new Error('File not found'))
+    }
+  }
+
+  findFileWithCaseInsensitive(targetKey, callback) {
+    // Simplified approach: try common case variations
+    const variations = [
+      targetKey,
+      targetKey.toLowerCase(),
+      targetKey.toUpperCase(),
+      // Try first letter uppercase
+      targetKey.charAt(0).toUpperCase() + targetKey.slice(1).toLowerCase()
+    ]
+
+    this.tryKeyVariations(variations, 0, callback)
+  }
+
+  tryKeyVariations(variations, index, callback) {
+    if (index >= variations.length) {
+      callback(new Error('File not found'), null)
+      return
+    }
+
+    const key = variations[index]
+
+    this.cos().headObject({
+      Bucket: this.bucket,
+      Region: this.region,
+      Key: key
+    }, (err, data) => {
+      if (err) {
+        // Try next variation
+        this.tryKeyVariations(variations, index + 1, callback)
+      } else {
+        // Found it!
+        callback(null, key)
+      }
+    })
   }
 
   read (options) {
