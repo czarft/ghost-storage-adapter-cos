@@ -73,5 +73,5 @@
     "test": "exit 0",
     "travis-deploy-once": "travis-deploy-once"
   },
-  "version": "1.0.5"
+  "version": "1.0.7"
 }
