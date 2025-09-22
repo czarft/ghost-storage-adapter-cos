@@ -45,7 +45,8 @@ class Store extends BaseStore {
     // Asset host for CDN or custom domain
     // For private storage, don't set host so Ghost uses serve() method
     if (this.privateStorage) {
-      this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost || ''
+      const customHost = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost
+      this.host = customHost && customHost.trim() !== '' ? customHost : undefined
     } else {
       this.host = process.env.GHOST_STORAGE_ADAPTER_COS_ASSET_HOST || assetHost ||
         (this.domain ? `${this.protocol}//${this.domain}` :
@@ -166,8 +167,8 @@ class Store extends BaseStore {
             reject(err)
           } else {
             let finalUrl
-            // For private storage with empty host, return relative URL so Ghost uses serve() method
-            if (this.privateStorage && !this.host) {
+            // For private storage with undefined host, return relative URL so Ghost uses serve() method
+            if (this.privateStorage && this.host === undefined) {
               finalUrl = `/${this.pathPrefix ? this.pathPrefix + '/' : ''}${normalizedFileName}`
             } else {
               finalUrl = `${this.host}/${normalizedFileName}`
@@ -176,7 +177,9 @@ class Store extends BaseStore {
             this.log('Save successful', {
               fileName: normalizedFileName,
               finalUrl,
-              isPrivateWithoutHost: this.privateStorage && !this.host
+              isPrivateWithoutHost: this.privateStorage && this.host === undefined,
+              hostValue: this.host,
+              hostType: typeof this.host
             })
             resolve(finalUrl)
           }
